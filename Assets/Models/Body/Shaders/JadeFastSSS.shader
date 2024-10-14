@@ -24,21 +24,22 @@ Shader "Custom/JadeFastSSS_Body"
         _Ambient("Ambient", Float) = 1
         _Power("Power", Float) = 1
         _Scale("Scale", Float) = 1
+        _Wrap("_Wrap", Float) = 1
     }
     SubShader
     {
-        Tags { "RenderType" = "Opaque" }
+        Tags { "RenderType" = "Opaque" "RenderPipeline" = "UniversalPipeline" }
         LOD 100
 
         Pass
         {
-            CGPROGRAM
+            HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
 
-            #include "UnityCG.cginc"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
-            #define PI 3.14159265359
             #define EPS 1e-6
 
             float3 TBN(float3 fragPosition, float2 fragTexCoord, float3 fragNormal, float3 texNormal)
@@ -100,30 +101,37 @@ Shader "Custom/JadeFastSSS_Body"
 
             struct VertIn
             {
-                float4 position : POSITION;
-                float3 normal   : NORMAL;
-                float2 texCoord : TEXCOORD0;
+                float4 position     : POSITION;
+                float3 normal       : NORMAL;
+                float2 texCoord     : TEXCOORD0;
             };
 
             struct FragIn
             {
-                float4 position : SV_POSITION;
-                float3 normal   : NORMAL;
-                float2 texCoord : TEXCOORD0;
-                float4 worldPos : TEXCOORD1;
+                float4 position     : SV_POSITION;
+                float2 texCoord     : TEXCOORD0;
+                float3 worldPos     : TEXCOORD1;
+                float3 worldNormal  : TEXCOORD2;
             };
 
             float3 _CameraPosition;
             float3 _LightPosition;
+            float4 _Diffuse_ST;
             
-            sampler2D _Diffuse;
-            sampler2D _Specular;
+            TEXTURE2D(_Diffuse);
+			SAMPLER(sampler_Diffuse);
+            TEXTURE2D(_Specular);
+			SAMPLER(sampler_Specular);
         
-            sampler2D _Normal;
-            sampler2D _AO;
+            TEXTURE2D(_Normal);
+            SAMPLER(sampler_Normal);
+            TEXTURE2D(_AO);
+            SAMPLER(sampler_AO);
 
-            sampler2D _Thickness;
-            sampler2D _Curvature;
+            TEXTURE2D(_Thickness);
+            SAMPLER(sampler_Thickness);
+            TEXTURE2D(_Curvature);
+            SAMPLER(sampler_Curvature);
 
             float _DiffuseStrength;
             float _SpecularStrength;
@@ -138,42 +146,44 @@ Shader "Custom/JadeFastSSS_Body"
             float _Ambient;
             float _Power;
             float _Scale;
+            float _Wrap;
 
             FragIn vert (VertIn i)
             {
                 FragIn o;
-                o.position = UnityObjectToClipPos(i.position);
-                o.normal = UnityObjectToWorldNormal(i.normal);
-                o.texCoord = i.texCoord;
-                o.worldPos = mul(unity_ObjectToWorld, i.position);
+                VertexPositionInputs vertexInput = GetVertexPositionInputs(i.position.xyz);
+                o.position = vertexInput.positionCS;
+                o.texCoord = TRANSFORM_TEX(i.texCoord, _Diffuse);
+                o.worldPos = vertexInput.positionWS;
+                o.worldNormal = TransformObjectToWorldNormal(i.normal);
                 return o;
             }
 
             float4 frag (FragIn i) : SV_Target
             {
-                float4 texDiffuse = tex2D(_Diffuse, i.texCoord);
-                float4 texSpecular = tex2D(_Diffuse, i.texCoord);
+                float4 texDiffuse = SAMPLE_TEXTURE2D(_Diffuse, sampler_Diffuse, i.texCoord);
+                float4 texSpecular = SAMPLE_TEXTURE2D(_Specular, sampler_Specular, i.texCoord);
             
-                float3 texNormal = tex2D(_Normal, i.texCoord);
-                float texAO = tex2D(_AO, i.texCoord);
+                float3 texNormal = SAMPLE_TEXTURE2D(_Normal, sampler_Normal, i.texCoord).xyz;
+                float texAO = SAMPLE_TEXTURE2D(_AO, sampler_AO, i.texCoord).x;
 
-                float texThickness = tex2D(_Thickness, i.texCoord);
-                float texCurvature = tex2D(_Curvature, i.texCoord);
+                float texThickness = SAMPLE_TEXTURE2D(_Thickness, sampler_Thickness, i.texCoord).x;
+                float texCurvature = SAMPLE_TEXTURE2D(_Curvature, sampler_Curvature, i.texCoord).x;
 
                 float3 lightDir = normalize(_LightPosition - i.worldPos);
                 float3 viewDir = normalize(_CameraPosition - i.worldPos);
 
-                float4 diffuse = _DiffuseStrength * texDiffuse;
-                float3 brdf = BRDF(TBN(i.position, i.texCoord, i.normal, texNormal), lightDir, viewDir, texSpecular.rgb, _Roughness, _Fresnel, _Metallic);
-                float4 specular = _SpecularStrength * float4(brdf, 1);
+                float4 diffuse = _DiffuseStrength * texDiffuse * max(0, (dot(texNormal, lightDir) + _Wrap) / (1 + _Wrap)) * _LightColor;
+                float3 brdf = BRDF(TBN(i.position.xyz, i.texCoord, i.worldNormal, texNormal), lightDir, viewDir, texSpecular.rgb, _Roughness, _Fresnel, _Metallic);
+                float4 specular = _SpecularStrength * float4(brdf, 1) * _LightColor;
 
                 float3 halfDir = lightDir + texNormal * _Distortion;
-                float vDotH = pow(saturate(dot(viewDir, -halfDir)), _Power) * _Scale;
-                float jadeIllu = _LightAtten * (vDotH + _Ambient) * texThickness;
+                float VDotH = pow(saturate(dot(viewDir, -halfDir)), _Power) * _Scale;
+                float4 jade = _LightAtten * (VDotH + _Ambient) * texThickness * _LightColor;
 
-                return diffuse + specular;
+                return diffuse + specular + jade;
             }
-            ENDCG
+            ENDHLSL
         }
     }
 }

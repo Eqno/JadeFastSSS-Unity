@@ -6,36 +6,18 @@ Shader "Custom/JadeFastSSS_HuTao"
     }
     SubShader
     {
-        Tags { "RenderType" = "Opaque" }
+        Tags { "RenderType" = "Opaque" "RenderPipeline" = "UniversalPipeline" }
         LOD 100
 
         Pass
         {
-            CGPROGRAM
+            HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
-            #include "UnityCG.cginc"
+            
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
-            struct VertIn
-            {
-                float4 position : POSITION;
-                float3 normal   : NORMAL;
-                float2 texCoord : TEXCOORD0;
-            };
-
-            struct FragIn
-            {
-                float4 position : SV_POSITION;
-                float3 normal   : NORMAL;
-                float2 texCoord : TEXCOORD0;
-                float4 worldPos : TEXCOORD1;
-            };
-
-            sampler2D _BaseColor;
-            float4 _CameraPosition;
-            float4 _LightPosition;
-
-            #define PI 3.14159265359
             #define EPS 1e-6
 
             float DistributionGGX(float dnh, float r)
@@ -81,13 +63,36 @@ Shader "Custom/JadeFastSSS_HuTao"
                 return kd * color / PI + specular;
             }
 
+            struct VertIn
+            {
+                float4 position     : POSITION;
+                float3 normal       : NORMAL;
+                float2 texCoord     : TEXCOORD0;
+            };
+
+            struct FragIn
+            {
+                float4 position     : SV_POSITION;
+                float2 texCoord     : TEXCOORD0;
+                float3 worldPos     : TEXCOORD1;
+                float3 worldNormal  : TEXCOORD2;
+            };
+
+            TEXTURE2D(_BaseColor);
+			SAMPLER(sampler_BaseColor);
+
+            float4 _CameraPosition;
+            float4 _LightPosition;
+            float4 _BaseColor_ST;
+
             FragIn vert (VertIn i)
             {
                 FragIn o;
-                o.position = UnityObjectToClipPos(i.position);
-                o.normal = UnityObjectToWorldNormal(i.normal);
-                o.texCoord = i.texCoord;
-                o.worldPos = mul(unity_ObjectToWorld, i.position);
+                VertexPositionInputs vertexInput = GetVertexPositionInputs(i.position.xyz);
+                o.position = vertexInput.positionCS;
+                o.texCoord = TRANSFORM_TEX(i.texCoord, _BaseColor);
+                o.worldPos = vertexInput.positionWS;
+                o.worldNormal = TransformObjectToWorldNormal(i.normal);
                 return o;
             }
 
@@ -108,21 +113,21 @@ Shader "Custom/JadeFastSSS_HuTao"
                 float3 _Fresnel = float3(0.1, 0.1, 0.1);
                 float _Metallic = 0.5;
 
-                float4 texColor = tex2D(_BaseColor, i.texCoord);
+                float4 texColor = SAMPLE_TEXTURE2D(_BaseColor, sampler_BaseColor, i.texCoord);
                 float3 lightDir = normalize(_LightPosition.xyz - i.worldPos);
                 float3 viewDir = normalize(_CameraPosition.xyz - i.worldPos);
 
-                float4 diffuse = _DiffuseStrength * texColor;
-                float3 brdf = BRDF(i.normal, lightDir, viewDir, texColor.rgb, _Roughness, _Fresnel, _Metallic);
+                float4 diffuse = _DiffuseStrength * texColor * _LightColor;
+                float3 brdf = BRDF(i.worldNormal, lightDir, viewDir, texColor.rgb, _Roughness, _Fresnel, _Metallic);
                 float4 specular = _SpecularStrength * float4(brdf, 1) * _LightColor;
 
-                float3 halfDir = lightDir + i.normal * _Distortion;
+                float3 halfDir = lightDir + i.worldNormal * _Distortion;
                 float vDotH = pow(saturate(dot(viewDir, -halfDir)), _Power) * _Scale;
-                float jadeIllu = _LightAtten * (vDotH + _Ambient);
+                float4 jade = _LightAtten * (vDotH + _Ambient) * _LightColor;
 
-                return specular;
+                return diffuse + specular + jade;
             }
-            ENDCG
+            ENDHLSL
         }
     }
 }
